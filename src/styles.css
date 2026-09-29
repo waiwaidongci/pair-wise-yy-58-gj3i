@@ -87,12 +87,28 @@ body { margin: 0; min-width: 320px; background: var(--paper); }
 .comment-row button { border: 0; background: transparent; color: #126a58; padding: 0; cursor: pointer; font-size: 11px; }
 .resolved { font-size: 11px; color: #2b8a69; }
 .empty-state { color: #71847d; text-align: center; padding: 30px 12px; }
-.review-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 18px; }
-.review-card { border: 1px solid var(--line); border-radius: 6px; padding: 14px; background: #fafcfb; }
-.review-card .review-head { display: flex; justify-content: space-between; margin-bottom: 10px; }
+.review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); gap: 12px; padding: 18px; }
+.review-card { border: 1px solid var(--line); border-radius: 6px; padding: 14px; background: #fafcfb; display: flex; flex-direction: column; }
+.review-card .review-head { display: flex; justify-content: space-between; margin-bottom: 10px; gap: 8px; }
 .review-card > span { color: #6d8079; font-size: 12px; }
-.review-card p { min-height: 42px; color: #3f564e; font-size: 13px; }
+.review-card > article > p,
+.review-card > p { min-height: 42px; color: #3f564e; font-size: 13px; }
 .review-card .q-btn { width: 100%; }
+.signoff-banner { margin: 18px 18px 0; padding: 12px 14px; border-radius: 6px; display: flex; align-items: center; gap: 11px; }
+.signoff-banner.locked { background: #e2f3ec; color: #135947; border: 1px solid #b8ddd1; }
+.signoff-banner.invalid { background: #fdecea; color: #9c312b; border: 1px solid #f1c5c1; }
+.signoff-banner strong, .signoff-banner span { display: block; }
+.signoff-banner span { margin-top: 3px; font-size: 12px; line-height: 1.45; }
+.signoff-record { border-radius: 5px; padding: 10px; margin: 10px 0; font-size: 12px; line-height: 1.45; }
+.signoff-record strong { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.signoff-record p { margin: 6px 0; }
+.signoff-record small { color: #687c74; }
+.signoff-record.valid { background: #eaf6f1; border: 1px solid #c7e4da; }
+.signoff-record.invalid-record { background: #fdecea; border: 1px solid #f0c7c4; color: #9b312b; }
+.signoff-record.pending-record { background: #f3f6f4; border: 1px dashed #c7d2cd; }
+.reservation-input { margin-bottom: 9px; }
+.review-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: auto; }
+.review-actions .q-btn { font-size: 12px; }
 .release-gate { margin: 0 18px 18px; padding: 15px; background: #153b31; color: white; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .release-gate > div { display: flex; align-items: center; gap: 10px; }
 .release-gate strong, .release-gate span { display: block; }
@@ -100,6 +116,21 @@ body { margin: 0; min-width: 320px; background: var(--paper); }
 .readiness { text-align: right; }
 .readiness strong { display: block; font-size: 22px; color: #146c5a; }
 .readiness span { color: #75867f; font-size: 11px; }
+.history-panel { border-top: 1px solid var(--line); padding: 18px; background: #fbfdfc; }
+.history-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.history-heading h3 { margin: 0; font-size: 15px; }
+.version-header { font-size: 13px; }
+.version-detail { padding: 12px 18px 16px 52px; background: #f8faf9; }
+.version-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; color: #60756d; font-size: 12px; margin-bottom: 12px; }
+.version-detail h4 { margin: 14px 0 8px; font-size: 12px; letter-spacing: .04em; color: #365249; }
+.history-record { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; align-items: start; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.history-record strong, .history-record small { display: block; }
+.history-record small, .muted { color: #71847d; }
+.history-record p { grid-column: 1 / -1; margin: 5px 0 0; color: #455b53; font-size: 12px; line-height: 1.5; }
+.history-comment { padding: 9px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px; }
+.history-comment p { grid-column: 1 / -1; margin: 0; color: #455b53; font-size: 12px; line-height: 1.5; }
+.version-steps { display: grid; gap: 6px; }
+.version-steps span { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 8px; color: #4c625a; font-size: 12px; line-height: 1.5; }
 
 @media (max-width: 980px) {
   .work-grid, .check-layout { grid-template-columns: 1fr; }

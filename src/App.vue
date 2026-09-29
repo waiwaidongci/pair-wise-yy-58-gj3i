@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import * as THREE from 'three';
-import { useLiftStore } from './store';
+import { useLiftStore, type LiftStep, type PublishedVersion, type Signer, type SignoffInvalidReason, type SignoffRecord } from './store';
 
 const route = useRoute();
 const router = useRouter();
@@ -10,6 +10,13 @@ const store = useLiftStore();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const commentText = ref('');
 const sceneContainer = ref<HTMLElement | null>(null);
+const stepDraft = reactive<LiftStep>({ ...store.selectedStep });
+const reservationDrafts = reactive<Record<string, string>>(
+  Object.fromEntries(store.signers.map((signer) => {
+    const current = store.signoffByPerson(signer.id);
+    return [signer.id, current?.decision === 'reserved' ? current.reservation ?? '' : ''];
+  }))
+);
 let renderer: THREE.WebGLRenderer | null = null;
 let frame = 0;
 let resizeObserver: ResizeObserver | null = null;
@@ -38,6 +45,74 @@ function severityLabel(severity: string) {
 function submitComment() {
   store.addComment(commentText.value);
   commentText.value = '';
+}
+
+watch(
+  () => store.selectedStep,
+  (step) => Object.assign(stepDraft, { ...step })
+);
+
+function saveStepDraft() {
+  const patch: Partial<LiftStep> = {
+    status: stepDraft.status,
+    note: stepDraft.note
+  };
+  const numericFields = ['loadRate', 'clearance', 'wind', 'radius', 'boom'] as const;
+  numericFields.forEach((field) => {
+    const value = Number(stepDraft[field]);
+    if (Number.isFinite(value)) patch[field] = value;
+  });
+  store.updateStep(patch);
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return '—';
+  return new Date(value).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+const invalidReasonLabels: Record<SignoffInvalidReason, string> = {
+  step_parameters: '步骤参数',
+  control_notes: '控制说明',
+  conflict_status: '冲突处理',
+  version_created: '新版本创建'
+};
+
+function latestSignoff(signer: Signer): SignoffRecord | undefined {
+  return store.signoffByPerson(signer.id) ?? store.latestHistoryByPerson(signer.id, store.workingRevision);
+}
+
+function signoffState(record?: SignoffRecord) {
+  if (!record) return { label: '待确认', color: 'grey' };
+  if (record.invalidatedAt) return { label: '签字已失效', color: 'negative' };
+  if (record.supersededAt) return { label: '已更新', color: 'grey' };
+  return record.decision === 'accepted'
+    ? { label: '已接受', color: 'positive' }
+    : { label: '有保留', color: 'warning' };
+}
+
+function invalidReasons(record?: SignoffRecord) {
+  return record?.invalidatedReasons?.map((reason) => invalidReasonLabels[reason]).join('、') ?? '';
+}
+
+function acceptPlan(signer: Signer) {
+  if (store.submitSignoff(signer.id, 'accepted')) reservationDrafts[signer.id] = '';
+}
+
+function reservePlan(signer: Signer) {
+  store.submitSignoff(signer.id, 'reserved', reservationDrafts[signer.id]);
+}
+
+function recordStateLabel(version: PublishedVersion, record: SignoffRecord) {
+  if (version.signoffs.some((item) => item.id === record.id)) return { label: '发布签署', color: 'positive' };
+  if (record.invalidatedAt) return { label: '已失效', color: 'negative' };
+  if (record.supersededAt) return { label: '已更新', color: 'grey' };
+  return record.decision === 'accepted' ? { label: '已接受', color: 'teal' } : { label: '保留意见', color: 'warning' };
 }
 
 function initializeScene() {
@@ -174,7 +249,7 @@ onBeforeUnmount(() => {
         <div class="brand-mark">LIFT</div>
         <div class="brand-copy">
           <strong>大型构件吊装三维校核</strong>
-          <span>东塔转换桁架 · 方案版本 V{{ store.revision }}</span>
+          <span>东塔转换桁架 · {{ store.locked ? '已发布版本' : '待发布版本' }} V{{ store.workingRevision }}</span>
         </div>
         <q-space />
         <q-badge :color="store.locked ? 'teal' : 'orange'" outline class="status-badge">
@@ -219,7 +294,26 @@ onBeforeUnmount(() => {
           </div>
           <div class="heading-actions">
             <q-btn outline no-caps icon="ios_share" label="导出吊装指令" />
-            <q-btn color="primary" no-caps icon="lock" :label="store.locked ? '版本已锁定' : '确认并锁定'" :disable="store.locked || store.conflicts.length > 0 || store.openComments.length > 0" @click="store.lockPlan" />
+            <q-btn
+              v-if="store.locked"
+              color="primary"
+              outline
+              no-caps
+              icon="post_add"
+              label="基于 V{{ store.workingRevision }} 新建修订版"
+              @click="store.createRevisionFromLocked"
+            />
+            <q-btn
+              v-else
+              color="primary"
+              no-caps
+              icon="lock"
+              :label="`锁定并发布 V${store.workingRevision}`"
+              :disable="!store.canLock"
+              @click="store.lockPlan"
+            >
+              <q-tooltip v-if="store.lockBlockers.length">{{ store.lockBlockers.join('；') }}</q-tooltip>
+            </q-btn>
           </div>
         </header>
 
@@ -269,35 +363,36 @@ onBeforeUnmount(() => {
             <div class="panel-heading compact">
               <div>
                 <span class="panel-kicker">STEP INSPECTOR</span>
-                <h2>{{ store.selectedStep.id }} · {{ store.selectedStep.title }}</h2>
+                <h2>{{ stepDraft.id }} · {{ stepDraft.title }}</h2>
               </div>
             </div>
             <div class="metric-grid">
-              <div><span>荷载率</span><strong :class="{ danger: store.selectedStep.loadRate > 90 }">{{ store.selectedStep.loadRate }}%</strong></div>
-              <div><span>最小净空</span><strong :class="{ danger: store.selectedStep.clearance < 1.5 }">{{ store.selectedStep.clearance }}m</strong></div>
-              <div><span>作业半径</span><strong>{{ store.selectedStep.radius }}m</strong></div>
-              <div><span>风速限制</span><strong>{{ store.selectedStep.wind }}m/s</strong></div>
+              <div><span>荷载率</span><strong :class="{ danger: stepDraft.loadRate > 90 }">{{ stepDraft.loadRate }}%</strong></div>
+              <div><span>最小净空</span><strong :class="{ danger: stepDraft.clearance < 1.5 }">{{ stepDraft.clearance }}m</strong></div>
+              <div><span>作业半径</span><strong>{{ stepDraft.radius }}m</strong></div>
+              <div><span>风速限制</span><strong>{{ stepDraft.wind }}m/s</strong></div>
             </div>
             <label class="field-label">荷载率</label>
-            <q-slider v-model="store.selectedStep.loadRate" :min="0" :max="120" color="primary" />
+            <q-slider v-model.number="stepDraft.loadRate" :min="0" :max="120" color="primary" :disable="store.locked" />
             <div class="form-row">
-              <q-input v-model.number="store.selectedStep.clearance" type="number" label="最小净空 / m" outlined dense />
-              <q-input v-model.number="store.selectedStep.wind" type="number" label="风速 / m/s" outlined dense />
+              <q-input v-model.number="stepDraft.clearance" type="number" label="最小净空 / m" outlined dense :disable="store.locked" />
+              <q-input v-model.number="stepDraft.wind" type="number" label="风速 / m/s" outlined dense :disable="store.locked" />
             </div>
             <label class="field-label">步骤结论</label>
             <q-btn-toggle
-              v-model="store.selectedStep.status"
+              v-model="stepDraft.status"
               spread
               no-caps
               toggle-color="primary"
+              :disable="store.locked"
               :options="[
                 { label: '待复核', value: 'pending' },
                 { label: '通过', value: 'passed' },
                 { label: '阻断', value: 'blocked' }
               ]"
             />
-            <q-input v-model="store.selectedStep.note" type="textarea" autogrow outlined label="现场控制说明" class="note-input" />
-            <q-btn class="save-step" color="primary" no-caps icon="save" label="保存步骤修改" @click="store.updateStep({})" />
+            <q-input v-model="stepDraft.note" type="textarea" autogrow outlined label="现场控制说明" class="note-input" :disable="store.locked" />
+            <q-btn class="save-step" color="primary" no-caps icon="save" label="保存步骤修改" :disable="store.locked" @click="saveStepDraft" />
           </aside>
         </section>
 
@@ -325,12 +420,13 @@ onBeforeUnmount(() => {
                 <div>
                   <strong>{{ comment.author }} <small>{{ comment.role }}</small></strong>
                   <p>{{ comment.content }}</p>
-                  <button v-if="comment.status === 'open'" @click="store.resolveComment(comment.id)">标记已解决</button>
+                  <button v-if="comment.status === 'open' && !store.locked" @click="store.resolveComment(comment.id)">标记已解决</button>
+                  <span v-else-if="comment.status === 'open'" class="resolved">版本已锁定</span>
                   <span v-else class="resolved">已解决</span>
                 </div>
               </div>
-              <q-input v-model="commentText" type="textarea" outlined autogrow label="对该步骤提出条件或补充意见" />
-              <q-btn color="primary" no-caps icon="send" label="提交意见" @click="submitComment" />
+              <q-input v-model="commentText" type="textarea" outlined autogrow label="对该步骤提出条件或补充意见" :disable="store.locked" />
+              <q-btn color="primary" no-caps icon="send" label="提交意见" :disable="store.locked || !commentText.trim()" @click="submitComment" />
             </div>
           </div>
         </section>
@@ -343,26 +439,158 @@ onBeforeUnmount(() => {
             </div>
             <div class="readiness"><strong>{{ store.readiness }}%</strong><span>发布就绪度</span></div>
           </div>
+
+          <div v-if="store.locked" class="signoff-banner locked">
+            <q-icon name="verified" size="22px" />
+            <div>
+              <strong>V{{ store.workingRevision }} 已锁定发布</strong>
+              <span>锁定时记录了发布版本、步骤快照、四人签字和全部意见。之后修改需新建 V{{ store.workingRevision + 1 }} 并重新会签。</span>
+            </div>
+          </div>
+          <div v-else-if="store.invalidatedCurrentRevisionRecords.length > 0" class="signoff-banner invalid">
+            <q-icon name="gpp_bad" size="22px" />
+            <div>
+              <strong>V{{ store.workingRevision }} 存在已失效签字</strong>
+              <span>步骤参数、现场控制说明或冲突处理保存后，原签字立即失效；相关人员必须重新接受后方可发布。</span>
+            </div>
+          </div>
+
           <div class="review-grid">
-            <article v-for="person in [
-              { name: '陈晓', team: '总包项目部', scope: '吊装工序与场地移交', state: '已接受' },
-              { name: '刘明', team: '设备管理', scope: '吊车参数与支腿地基', state: '待确认' },
-              { name: '周工', team: '安全监督', scope: '净空、风速与警戒区', state: '有保留' },
-              { name: '赵磊', team: '方案工程', scope: '载荷计算与路径参数', state: '待确认' }
-            ]" :key="person.name" class="review-card">
-              <div class="review-head"><strong>{{ person.name }}</strong><q-badge :color="person.state === '已接受' ? 'positive' : person.state === '有保留' ? 'warning' : 'grey'">{{ person.state }}</q-badge></div>
-              <span>{{ person.team }}</span>
-              <p>{{ person.scope }}</p>
-              <q-btn v-if="person.state !== '已接受'" outline no-caps label="接受方案" />
-              <q-btn v-else disable no-caps label="已签署" />
+            <article v-for="person in store.signers" :key="person.id" class="review-card">
+              <template v-for="record in [latestSignoff(person)]" :key="person.id">
+                <div class="review-head">
+                  <strong>{{ person.name }}</strong>
+                  <q-badge :color="signoffState(record).color">{{ signoffState(record).label }}</q-badge>
+                </div>
+                <span>{{ person.team }}</span>
+                <p>{{ person.scope }}</p>
+
+                <div v-if="record && !record.invalidatedAt" class="signoff-record valid">
+                  <template v-if="record.decision === 'accepted'">
+                    <strong><q-icon name="check_circle" color="positive" /> 已接受方案</strong>
+                    <small>签字时间：{{ formatDateTime(record.signedAt) }}</small>
+                  </template>
+                  <template v-else>
+                    <strong><q-icon name="error" color="warning" /> 保留意见</strong>
+                    <p>{{ record.reservation }}</p>
+                    <small>提交时间：{{ formatDateTime(record.signedAt) }}</small>
+                  </template>
+                </div>
+                <div v-else-if="record" class="signoff-record invalid-record">
+                  <strong>原签字已失效：{{ invalidReasons(record) }}已改动</strong>
+                  <small>失效时间：{{ formatDateTime(record.invalidatedAt) }}，请重新确认。</small>
+                </div>
+                <div v-else class="signoff-record pending-record">
+                  <small>尚未对 V{{ store.workingRevision }} 作出确认。</small>
+                </div>
+
+                <q-input
+                  v-model="reservationDrafts[person.id]"
+                  type="textarea"
+                  autogrow
+                  outlined
+                  dense
+                  class="reservation-input"
+                  label="保留意见（不接受时必填）"
+                  :disable="store.locked || (record?.decision === 'reserved' && !record.invalidatedAt && reservationDrafts[person.id].trim() === record.reservation)"
+                />
+                <div class="review-actions">
+                  <q-btn
+                    color="positive"
+                    no-caps
+                    icon="task_alt"
+                    label="接受"
+                    :disable="store.locked || (record?.decision === 'accepted' && !record.invalidatedAt)"
+                    @click="acceptPlan(person)"
+                  />
+                  <q-btn
+                    outline
+                    color="warning"
+                    no-caps
+                    icon="rate_review"
+                    label="提交保留"
+                    :disable="store.locked || !reservationDrafts[person.id].trim() || (record?.decision === 'reserved' && !record.invalidatedAt && reservationDrafts[person.id].trim() === record.reservation)"
+                    @click="reservePlan(person)"
+                  />
+                </div>
+              </template>
             </article>
           </div>
+
           <div class="release-gate">
             <div>
-              <q-icon name="verified_user" size="30px" />
-              <div><strong>发布前门禁</strong><span>要求冲突清零、意见全部关闭、四个角色完成签署。</span></div>
+              <q-icon :name="store.canLock ? 'verified_user' : 'lock'" size="30px" />
+              <div>
+                <strong>发布前门禁</strong>
+                <span v-if="store.locked">V{{ store.workingRevision }} 已发布；发布快照含最终四人签字。</span>
+                <span v-else-if="store.canLock">四人全部接受且无遗留保留意见，可锁定发布 V{{ store.workingRevision }}。</span>
+                <span v-else>{{ store.lockBlockers.join('；') }}</span>
+              </div>
             </div>
-            <q-btn color="primary" no-caps icon="lock" label="锁定并发布 V{{ store.revision + 1 }}" :disable="store.conflicts.length > 0 || store.openComments.length > 0" @click="store.lockPlan" />
+            <q-btn
+              :color="store.canLock ? 'primary' : 'grey-7'"
+              no-caps
+              icon="lock"
+              :label="store.locked ? `V${store.workingRevision} 已锁定` : `锁定并发布 V${store.workingRevision}`"
+              :disable="store.locked || !store.canLock"
+              @click="store.lockPlan"
+            />
+          </div>
+
+          <div class="history-panel">
+            <div class="history-heading">
+              <h3>历史发布版本会签</h3>
+              <q-badge outline color="teal">{{ store.publishedVersions.length }} 个版本</q-badge>
+            </div>
+            <q-list v-if="store.publishedVersions.length" bordered separator>
+              <q-expansion-item
+                v-for="version in store.publishedVersions"
+                :key="version.revision"
+                :icon="version.revision === store.workingRevision ? 'lock' : 'history'"
+                :label="`V${version.revision} · ${formatDateTime(version.publishedAt)}`"
+                :caption="`${version.signoffs.length} 人最终接受 · ${version.comments.length} 条意见快照`"
+                header-class="version-header"
+              >
+                <div class="version-detail">
+                  <div class="version-meta">
+                    <span>发布时间：{{ formatDateTime(version.publishedAt) }}</span>
+                    <span>来源修订：{{ version.basedOnRevision ? `V${version.basedOnRevision} 草稿` : '初次发布' }}</span>
+                    <span>步骤快照：{{ version.steps.length }} 步</span>
+                  </div>
+
+                  <h4>签字记录</h4>
+                  <div v-for="record in version.records" :key="record.id" class="history-record">
+                    <div>
+                      <strong>{{ record.personName }} · {{ record.team }}</strong>
+                      <small>{{ formatDateTime(record.signedAt) }} ｜ {{ record.scope }}</small>
+                    </div>
+                    <q-badge :color="recordStateLabel(version, record).color">{{ recordStateLabel(version, record).label }}</q-badge>
+                    <p v-if="record.reservation">保留意见：{{ record.reservation }}</p>
+                    <small v-if="record.invalidatedAt" class="muted">
+                      失效于 {{ formatDateTime(record.invalidatedAt) }}（{{ invalidReasons(record) }}）
+                    </small>
+                  </div>
+
+                  <h4>条件与评论</h4>
+                  <div v-if="version.comments.length === 0" class="empty-state">该版本没有评论记录。</div>
+                  <div v-for="comment in version.comments" :key="comment.id" class="history-comment">
+                    <strong>{{ comment.stepId }} · {{ comment.author }}（{{ comment.role }}）</strong>
+                    <q-badge dense :color="comment.status === 'resolved' ? 'positive' : 'warning'">
+                      {{ comment.status === 'resolved' ? '已关闭' : '未关闭' }}
+                    </q-badge>
+                    <p>{{ comment.content }}</p>
+                  </div>
+
+                  <h4>步骤参数与控制说明</h4>
+                  <div class="version-steps">
+                    <span v-for="step in version.steps" :key="step.id">
+                      {{ step.id }}：荷载 {{ step.loadRate }}%，净空 {{ step.clearance }}m，风速 {{ step.wind }}m/s；{{ step.note }}
+                    </span>
+                  </div>
+                </div>
+              </q-expansion-item>
+            </q-list>
+            <div v-else class="empty-state">尚未锁定发布版本；发布后可在这里查回每一版的签字和意见。</div>
           </div>
         </section>
       </q-page>
