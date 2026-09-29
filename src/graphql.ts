@@ -13,6 +13,16 @@ export const LIFT_PLAN_QUERY = gql`
         loadRate
         clearance
       }
+      release {
+        revision
+        lockedAt
+        signatures {
+          personName
+          decision
+          reservation
+          signedAt
+        }
+      }
     }
   }
 `;
@@ -32,7 +42,8 @@ graphqlClient.writeQuery({
       name: '东塔转换桁架吊装',
       revision: 4,
       status: 'REVIEW',
-      steps: []
+      steps: [],
+      release: null
     }
   }
 });
